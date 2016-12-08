@@ -9,12 +9,12 @@ const POOL_SIZE: usize = (!0 as u16) as usize;
 
 #[derive(Debug)]
 struct Store {
-    lByteCode: usize,
+    last: usize,
     ptr: Vec<ByteCode>,
 }
 
 thread_local!(static BIN_POOL: UnsafeCell<Store> = UnsafeCell::new(Store {
-            lByteCode: 0,
+            last: 0,
             ptr: Vec::with_capacity(POOL_SIZE),
         }));
 
@@ -138,9 +138,9 @@ fn store<'a>(b: ByteCode) -> &'a ByteCode {
     BIN_POOL.with(|p| {
         let v = p.get();
         unsafe {
-            let l = (*v).lByteCode;
+            let l = (*v).last;
             (*v).ptr[l] = b;
-            (*v).lByteCode += 1;
+            (*v).last += 1;
             &(*v).ptr[l]
         }
     })
