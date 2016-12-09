@@ -8,15 +8,25 @@ use std::ops::Deref;
 const POOL_SIZE: usize = (!0 as u16) as usize;
 
 #[derive(Debug)]
-struct Store {
+pub struct Handle<'a> {
     last: usize,
-    ptr: Vec<ByteCode>,
+    ptr: Vec<ByteCode<'a>>,
 }
 
-thread_local!(static BIN_POOL: UnsafeCell<Store> = UnsafeCell::new(Store {
-            last: 0,
-            ptr: Vec::with_capacity(POOL_SIZE),
-        }));
+impl<'a> Handle<'a> {
+    fn store(&'a mut self, b: ByteCode<'a>) -> usize {
+        self.ptr.push(b);
+        &self.ptr.len() - 1
+    }
+
+    #[inline]
+    pub fn split(&'a mut self) -> (&'a mut Handle<'a>, &'a mut Handle<'a>) {
+        let f: *mut Handle<'a> = self;
+        let uf: &mut Handle<'a> = unsafe { &mut *f };
+        let us: &mut Handle<'a> = unsafe { &mut *f };
+        (uf, us)
+    }
+}
 
 #[derive(Debug)]
 pub enum Error {
@@ -25,68 +35,78 @@ pub enum Error {
 }
 
 pub struct Bin<'a> {
-    ptr: &'a ByteCode,
+    id: usize,
+    hdl: &'a Handle<'a>,
 }
 
 impl<'a> Bin<'a> {
-    pub fn new(x: ByteCode) -> Bin<'a> {
-        let p = store(x);
-        Bin { ptr: p }
+    pub fn new(h: &'a mut Handle<'a>, x: ByteCode<'a>) -> Bin<'a> {
+        let (h1, h2) = h.split();
+        Bin {
+            hdl: h1,
+            id: h2.store(x),
+        }
+    }
+
+    #[inline]
+    fn bc(&self) -> &ByteCode<'a> {
+        &self.hdl.ptr[self.id]
     }
 }
 
 impl<'a> Deref for Bin<'a> {
-    type Target = ByteCode;
+    type Target = ByteCode<'a>;
 
-    fn deref(&self) -> &ByteCode {
-        self.ptr
+    fn deref(&self) -> &Self::Target {
+        self.bc()
     }
 }
 
 impl<'a> fmt::Display for Bin<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{}", self.ptr)
+        write!(f, "{}", self.bc())
     }
 }
 
 impl<'a> fmt::Debug for Bin<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "{:?}", self.ptr)
+        write!(f, "{:?}", self.bc())
     }
 }
 
 #[derive(Debug)]
-pub enum ByteCode {
+pub enum ByteCode<'a> {
     Nil,
-    Cons(Bin<'static>, Bin<'static>),
-    List(Bin<'static>),
-    Dict(Bin<'static>),
-    Call(Bin<'static>, Bin<'static>),
-    Lambda(Bin<'static>, Bin<'static>),
-    Verb(u16, Bin<'static>, Bin<'static>),
-    Adverb(u16, Bin<'static>, Bin<'static>),
-    Ioverb(Bin<'static>),
-    NameInt(Bin<'static>),
-    SymbolInt(Bin<'static>),
-    SequenceInt(Bin<'static>),
-    Name(Bin<'static>),
+    Cons(Bin<'a>, Bin<'a>),
+    List(Bin<'a>),
+    Dict(Bin<'a>),
+    Call(Bin<'a>, Bin<'a>),
+    Lambda(Bin<'a>, Bin<'a>),
+    Verb(u16, Bin<'a>, Bin<'a>),
+    Adverb(u16, Bin<'a>, Bin<'a>),
+    Ioverb(Bin<'a>),
+    NameInt(Bin<'a>),
+    SymbolInt(Bin<'a>),
+    SequenceInt(Bin<'a>),
+    Name(Bin<'a>),
     Number(i64),
     Hexlit(i64),
     Bool(bool),
     Symbol(u16),
-    Sequence(Bin<'static>),
-    Cell(Bin<'static>),
-    Assign(Bin<'static>, Bin<'static>),
-    Cond(Bin<'static>, Bin<'static>, Bin<'static>),
+    Sequence(Bin<'a>),
+    Cell(Bin<'a>),
+    Assign(Bin<'a>, Bin<'a>),
+    Cond(Bin<'a>, Bin<'a>, Bin<'a>),
 }
 
-impl ByteCode {
-    pub fn bin<'a>(self) -> Bin<'a> {
-        Bin::new(self)
+impl<'a> ByteCode<'a> {
+    pub fn bin(self, h: &'a UnsafeCell<Handle<'a>>) -> Bin<'a> {
+        let ptr = unsafe { &mut *h.get() };
+        Bin::new(ptr, self)
     }
 }
 
-impl fmt::Display for ByteCode {
+impl<'a> fmt::Display for ByteCode<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match *self {
             ByteCode::Nil => write!(f, ""),
@@ -119,29 +139,12 @@ impl fmt::Display for ByteCode {
             ByteCode::Assign(ref a, ref b) => write!(f, "{}:{}", *a, *b),
             ByteCode::Cond(ref c, ref a, ref b) => write!(f, "$[{};{};{}]", *c, *a, *b),
         }
-
     }
 }
 
-pub fn init_pool() {
-    BIN_POOL.with(|p| {
-        for i in 0..POOL_SIZE {
-            let v = p.get();
-            unsafe {
-                (*v).ptr.push(ByteCode::Nil);
-            };
-        }
-    });
-}
-
-fn store<'a>(b: ByteCode) -> &'a ByteCode {
-    BIN_POOL.with(|p| {
-        let v = p.get();
-        unsafe {
-            let l = (*v).last;
-            (*v).ptr[l] = b;
-            (*v).last += 1;
-            &(*v).ptr[l]
-        }
+pub fn handle<'a>() -> UnsafeCell<Handle<'a>> {
+    UnsafeCell::new(Handle {
+        last: 0,
+        ptr: Vec::with_capacity(POOL_SIZE),
     })
 }
